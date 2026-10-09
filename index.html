@@ -6,6 +6,24 @@
 <title>Handy-Hintergrund</title>
 <meta name="description" content="Bringt ein Foto ins exakte Bildschirmformat deines Handys, ohne Verzerren und ohne Abschneiden. Alles läuft im Browser.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='2' width='16' height='28' rx='4' fill='%232b59c3'/%3E%3Crect x='11' y='6' width='10' height='20' rx='1.5' fill='%23fff'/%3E%3C/svg%3E">
+<!-- Erlaubt der KI, mehrere Prozessorkerne zu nutzen (lädt die Seite beim ersten Besuch einmal neu) -->
+<script src="coi-serviceworker.js"></script>
+<script>
+  // Übernimmt der Service Worker die Seite erst nach dem Laden, fehlt die Freigabe noch: dann einmal neu laden
+  (function () {
+    var sw = navigator.serviceWorker;
+    if (!sw || window.crossOriginIsolated !== false) return;
+    function reloadOnce() {
+      try {
+        if (window.crossOriginIsolated || sessionStorage.getItem('coiReloaded')) return;
+        sessionStorage.setItem('coiReloaded', '1');
+      } catch (e) { return; }
+      location.reload();
+    }
+    if (sw.controller) reloadOnce();
+    sw.addEventListener('controllerchange', reloadOnce);
+  })();
+</script>
 <link rel="stylesheet" href="css/style.css">
 <script type="module" src="js/app.js"></script>
 </head>
@@ -69,6 +87,7 @@
     <div class="editor" id="editor" hidden>
       <div class="preview-wrap" id="previewWrap">
         <canvas id="preview" aria-label="Vorschau"></canvas>
+        <div class="preview-status" id="previewStatus" role="status" hidden></div>
       </div>
       <div class="editor-side">
         <div class="position" id="positionBox" hidden>

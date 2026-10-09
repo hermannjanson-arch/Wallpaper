@@ -1,12 +1,13 @@
 // Steuerung der Seite: Foto, Handy, Varianten, Vorschau und Export.
-import { DEFAULT_DEVICE } from './config.js';
+import { DEFAULT_DEVICE, LAMA_RECOMPUTE_DELAY } from './config.js';
 import { loadImageFile, makeCanvas, context2d, canvasToBlob, downloadBlob, buildFileName, canShareFile, shareBlob } from './image-io.js';
 import { loadDevices, searchDevices, detectScreen } from './devices.js';
 import { containRect, fillShare, freeAxis } from './layout.js';
 import { blurVariant } from './variants/blur.js';
+import { lamaVariant } from './variants/lama.js';
 
-// Reihenfolge = Reihenfolge der Anzeige. Weitere Varianten (KI, Seam Carving, Kombination) folgen.
-const VARIANTS = [blurVariant];
+// Reihenfolge = Rangfolge der Anzeige. Seam Carving und Kombination folgen.
+const VARIANTS = [lamaVariant, blurVariant];
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -14,8 +15,11 @@ const state = {
   source: null,        // { canvas, width, height, name, ... }
   target: null,        // { w, h, label, slug }
   offset: 0.5,         // Position des Originals entlang der freien Achse
+  sourceId: 0,         // zählt hoch, damit alte KI-Ergebnisse nicht für ein neues Foto gelten
   selected: null,      // id der gewählten Variante
-  results: new Map(),  // id -> Canvas in voller Zielauflösung
+  userPicked: false,   // hat der Nutzer selbst eine Variante gewählt?
+  results: new Map(),  // id -> { status: 'ready'|'pending'|'inactive'|'error', canvas, message, progress, key }
+  activation: new Map(), // id -> Fortschritt beim Laden des KI-Modells
 };
 
 // ---------- Speicher für Komfort (wird ignoriert, falls der Browser ihn blockiert) ----------
@@ -39,6 +43,8 @@ async function useFile(file) {
     return;
   }
   state.offset = 0.5;
+  state.sourceId++;
+  state.userPicked = false;
   const s = state.source;
   const thumb = $('sourceThumb');
   const t = Math.min(1, 128 / Math.max(s.width, s.height));
@@ -193,7 +199,9 @@ function makeJob() {
   const { w: W, h: H } = state.target;
   const s = state.source;
   const rect = containRect(s.width, s.height, W, H, state.offset);
-  return { source: s.canvas, W, H, rect, share: fillShare(rect, W, H), axis: freeAxis(rect, W, H) };
+  const job = { source: s.canvas, W, H, rect, share: fillShare(rect, W, H), axis: freeAxis(rect, W, H) };
+  job.key = `${state.sourceId}|${W}x${H}|${rect.x},${rect.y}`;
+  return job;
 }
 
 let renderQueued = false;
@@ -214,13 +222,94 @@ function renderNow() {
     ? `Zu füllen: ${Math.round(job.share * 100)} % der Fläche.`
     : 'Das Foto hat schon genau das richtige Format.';
 
-  state.results.clear();
-  for (const v of available) state.results.set(v.id, v.render(job));
-  if (!state.results.has(state.selected)) state.selected = available[0]?.id ?? null;
-
+  const previous = state.results;
+  state.results = new Map();
+  for (const v of available) {
+    if (!v.async) {
+      state.results.set(v.id, { status: 'ready', key: job.key, canvas: v.render(job) });
+      continue;
+    }
+    const old = previous.get(v.id);
+    if (old?.key === job.key && (old.status === 'ready' || old.scheduled)) {
+      state.results.set(v.id, old); // läuft schon, ist fertig oder ist fehlgeschlagen
+    } else if (!v.isReady()) {
+      const act = state.activation.get(v.id);
+      state.results.set(v.id, act
+        ? { status: 'pending', key: job.key, message: act.message, progress: act.progress }
+        : { status: 'inactive', key: job.key, message: v.activationHint });
+    } else {
+      state.results.set(v.id, { status: 'pending', key: job.key, message: 'KI rechnet gleich …', progress: 0, scheduled: true });
+      scheduleAsync(v, job);
+    }
+  }
+  chooseDefaultSelection(available);
   renderCards(available);
   updatePositionControls(job);
   drawPreview();
+}
+
+// Solange der Nutzer nichts angeklickt hat: die erste fertige Variante in der Rangfolge zeigen
+function chooseDefaultSelection(available) {
+  if (state.userPicked && state.results.has(state.selected)) return;
+  const ready = available.find((v) => state.results.get(v.id)?.status === 'ready');
+  state.selected = (ready ?? available[0])?.id ?? null;
+}
+
+// Rechenintensive Varianten erst starten, wenn der Nutzer kurz nichts mehr verändert hat
+const asyncTimers = new Map();
+function scheduleAsync(v, job) {
+  clearTimeout(asyncTimers.get(v.id));
+  asyncTimers.set(v.id, setTimeout(() => runAsync(v, job), LAMA_RECOMPUTE_DELAY));
+}
+
+async function runAsync(v, job) {
+  const isCurrent = () => state.results.get(v.id)?.key === job.key;
+  if (!isCurrent()) return;
+  const entry = state.results.get(v.id);
+  try {
+    const canvas = await v.render(job, {
+      isCurrent,
+      onMessage: (message, progress) => {
+        if (!isCurrent()) return;
+        Object.assign(entry, { message, progress });
+        updateStatus(v.id);
+      },
+    });
+    if (!isCurrent()) return;
+    Object.assign(entry, { status: 'ready', canvas });
+  } catch (err) {
+    if (err.message === 'stale' || !isCurrent()) return;
+    Object.assign(entry, { status: 'error', message: `Hat nicht geklappt: ${err.message}` });
+  }
+  const available = VARIANTS.filter((x) => state.results.has(x.id));
+  chooseDefaultSelection(available);
+  renderCards(available);
+  drawPreview();
+}
+
+// Erstes Antippen der KI-Karte: Modell laden (Download beim ersten Mal)
+async function activate(v) {
+  if (state.activation.has(v.id)) return;
+  const act = { message: 'KI wird geladen …', progress: 0 };
+  state.activation.set(v.id, act);
+  renderAll();
+  try {
+    await v.activate((message, progress) => {
+      Object.assign(act, { message, progress });
+      const entry = state.results.get(v.id);
+      if (entry) Object.assign(entry, { message, progress });
+      updateStatus(v.id);
+    });
+  } catch (err) {
+    state.activation.delete(v.id);
+    renderNow();
+    const entry = state.results.get(v.id);
+    if (entry) Object.assign(entry, { status: 'inactive', message: `Laden fehlgeschlagen: ${err.message} Antippen für neuen Versuch.` });
+    updateStatus(v.id);
+    return;
+  }
+  state.activation.delete(v.id);
+  renderAll();
 }
 
 function renderCards(available) {
@@ -236,32 +325,76 @@ function renderCards(available) {
       card.className = 'card';
       card.dataset.id = v.id;
       card.setAttribute('role', 'radio');
-      const canvas = document.createElement('canvas');
+      const thumb = document.createElement('span');
+      thumb.className = 'thumb';
+      const status = document.createElement('span');
+      status.className = 'status';
+      thumb.append(document.createElement('canvas'), status);
       const title = document.createElement('strong');
       title.textContent = v.name;
       const desc = document.createElement('span');
       desc.className = 'desc';
       desc.textContent = v.description;
-      card.append(canvas, title, desc);
+      card.append(thumb, title, desc);
       if (i === 0 && available.length > 1) {
         const badge = document.createElement('span');
         badge.className = 'badge';
         badge.textContent = 'Empfohlen';
         card.append(badge);
       }
-      card.addEventListener('click', () => { state.selected = v.id; markSelected(); drawPreview(); });
+      card.addEventListener('click', () => {
+        state.selected = v.id;
+        state.userPicked = true;
+        if (state.results.get(v.id)?.status === 'inactive') activate(v);
+        markSelected();
+        drawPreview();
+      });
       cards.append(card);
     });
   }
   for (const card of cards.children) {
-    const result = state.results.get(card.dataset.id);
+    const entry = state.results.get(card.dataset.id);
     const canvas = card.querySelector('canvas');
-    const scale = Math.min(1, 380 / result.height);
-    canvas.width = Math.round(result.width * scale);
-    canvas.height = Math.round(result.height * scale);
-    context2d(canvas).drawImage(result, 0, 0, canvas.width, canvas.height);
+    const shown = entry.status === 'ready' ? entry.canvas : placeholder();
+    const scale = Math.min(1, 380 / shown.height);
+    canvas.width = Math.round(shown.width * scale);
+    canvas.height = Math.round(shown.height * scale);
+    const ctx = context2d(canvas);
+    if (entry.status !== 'ready') ctx.globalAlpha = 0.3;
+    ctx.drawImage(shown, 0, 0, canvas.width, canvas.height);
+    updateStatus(card.dataset.id);
   }
   markSelected();
+}
+
+// Solange eine Variante noch nicht fertig ist, wird blass die Unschärfe-Variante gezeigt
+function placeholder() {
+  return state.results.get('blur').canvas;
+}
+
+function updateStatus(id) {
+  const entry = state.results.get(id);
+  const card = $('cards').querySelector(`[data-id="${id}"]`);
+  if (!entry || !card) return;
+  const el = card.querySelector('.status');
+  const showStatus = entry.status !== 'ready';
+  el.hidden = !showStatus;
+  card.classList.toggle('needs-action', entry.status === 'inactive');
+  if (showStatus) renderStatus(el, entry);
+  if (id === state.selected) updatePreviewStatus();
+}
+
+function renderStatus(el, entry) {
+  el.innerHTML = '';
+  const text = document.createElement('span');
+  text.textContent = entry.message ?? '';
+  el.append(text);
+  if (entry.status === 'pending') {
+    const bar = document.createElement('progress');
+    bar.max = 1;
+    if (entry.progress != null) bar.value = entry.progress;
+    el.append(bar);
+  }
 }
 
 function markSelected() {
@@ -279,8 +412,10 @@ function previewSize() {
 }
 
 function drawPreview() {
-  const result = state.results.get(state.selected);
-  if (!result) return;
+  const entry = state.results.get(state.selected);
+  if (!entry) return;
+  const ready = entry.status === 'ready';
+  const shown = ready ? entry.canvas : placeholder();
   const canvas = $('preview');
   const { cssW, cssH } = previewSize();
   const dpr = window.devicePixelRatio || 1;
@@ -288,8 +423,21 @@ function drawPreview() {
   canvas.style.height = `${cssH}px`;
   canvas.width = Math.round(cssW * dpr);
   canvas.height = Math.round(cssH * dpr);
-  context2d(canvas).drawImage(result, 0, 0, canvas.width, canvas.height);
+  const ctx = context2d(canvas);
+  if (!ready) ctx.globalAlpha = 0.3;
+  ctx.drawImage(shown, 0, 0, canvas.width, canvas.height);
   $('exportInfo').textContent = `Wird exakt in ${state.target.w} × ${state.target.h} Pixeln gespeichert.`;
+  updatePreviewStatus();
+}
+
+function updatePreviewStatus() {
+  const entry = state.results.get(state.selected);
+  const el = $('previewStatus');
+  const ready = entry?.status === 'ready';
+  el.hidden = ready || !entry;
+  if (!ready && entry) renderStatus(el, entry);
+  $('downloadBtn').disabled = !ready;
+  $('shareBtn').disabled = !ready;
 }
 
 function updatePositionControls(job) {
@@ -341,7 +489,7 @@ function currentFormat() {
 }
 
 async function exportBlob() {
-  const result = state.results.get(state.selected);
+  const result = state.results.get(state.selected).canvas;
   const format = currentFormat();
   const blob = await canvasToBlob(result, format);
   const name = buildFileName(state.source.name, state.target.slug, state.target.w, state.target.h, format);
@@ -370,6 +518,8 @@ async function init() {
   setupExport();
   state.devices = await loadDevices();
   setTarget(initialTarget());
+  // Liegt das KI-Modell schon im Browser, wird es ohne Nachfrage geladen (kein Download nötig)
+  if (await lamaVariant.isCached()) activate(lamaVariant);
 }
 
 init();

@@ -17,6 +17,18 @@ export const BLUR_WORK_SCALE = 1 / 8;   // Hintergrund wird verkleinert weichgez
 export const BLUR_RADIUS = 0.035;       // Unschärfe-Radius relativ zur längeren Seite
 export const BLUR_DARKEN = 0.22;        // Abdunkeln: 0 = gar nicht, 1 = schwarz
 
+// KI-Erweiterung (LaMa)
+export const LAMA_MODEL_URL = 'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx';
+export const LAMA_MODEL_BYTES = 208044816;  // für die Fortschrittsanzeige, falls der Server keine Größe meldet
+export const LAMA_CACHE_NAME = 'lama-model-v1';
+export const LAMA_SIZE = 512;               // feste Eingabegröße des Modells
+export const LAMA_MASK_DILATE = 4;          // Maske ragt so viele Modell-Pixel ins Original (gegen Kanten-Artefakte)
+export const LAMA_FEATHER = 48;             // weicher Übergang zum Original in Ziel-Pixeln (16 war im Test sichtbar)
+export const LAMA_GRAIN = 1;                // Korn auf der ergänzten Fläche, passend zum Rauschen des Originals (0 = aus)
+export const LAMA_STEPS = 1;                // Schritte für große Ränder. Im Test sahen 2 Schritte schlechter aus als 1
+export const LAMA_MAX_THREADS = 4;          // mehr Threads waren im Test langsamer (Effizienzkerne)
+export const LAMA_RECOMPUTE_DELAY = 500;    // Wartezeit (ms) nach dem Verschieben, bevor die KI neu rechnet
+
 // Export
 export const JPEG_QUALITY = 0.92;
 
