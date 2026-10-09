@@ -541,7 +541,8 @@ async function init() {
   state.devices = await loadDevices();
   setTarget(initialTarget());
   // Liegt das KI-Modell schon im Browser, wird es ohne Nachfrage geladen (kein Download nötig)
-  if (await lamaVariant.isCached()) activate(lamaVariant);
+  // Nach einem Absturz beim letzten Mal nicht automatisch starten, sonst stürzt die Seite immer wieder ab
+  if (!lamaVariant.lastCrash && await lamaVariant.isCached()) activate(lamaVariant);
 }
 
 init();

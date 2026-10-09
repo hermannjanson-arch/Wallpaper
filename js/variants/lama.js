@@ -1,7 +1,7 @@
 // Variante A: KI-Erweiterung mit LaMa. Läuft im Hintergrund und braucht beim ersten Mal den Modell-Download.
 import { LAMA_MODEL_BYTES } from '../config.js';
 import { expandWithLama } from '../lama/expand.js';
-import { loadModel, isModelCached, lamaInfo } from '../lama/lama-client.js';
+import { loadModel, isModelCached, lamaInfo, lastCrash } from '../lama/lama-client.js';
 
 const MB = 1_000_000;
 
@@ -30,7 +30,10 @@ export const lamaVariant = {
   description: 'Eine KI malt die fehlenden Ränder passend zum Foto weiter.',
   async: true,
   activationKey: 'lama',
-  activationHint: `Antippen, um die KI zu laden (einmalig ca. ${Math.round(LAMA_MODEL_BYTES / MB)} MB)`,
+  activationHint: lastCrash
+    ? 'Die KI ist hier beim letzten Mal abgestürzt, vermutlich zu wenig Arbeitsspeicher. Antippen für einen neuen Versuch.'
+    : `Antippen, um die KI zu laden (einmalig ca. ${Math.round(LAMA_MODEL_BYTES / MB)} MB)`,
+  lastCrash,
 
   isAvailable: (job) => !!job.axis,
   isReady: () => lamaInfo.ready,

@@ -5,40 +5,64 @@ import { LAMA_MODEL_URL, LAMA_MODEL_BYTES, LAMA_CACHE_NAME } from '../config.js'
 
 let session = null;
 
-async function loadModelBytes(id) {
-  const cache = await caches.open(LAMA_CACHE_NAME);
-  const cached = await cache.match(LAMA_MODEL_URL);
-  if (cached) return new Uint8Array(await cached.arrayBuffer());
-
-  const res = await fetch(LAMA_MODEL_URL);
-  if (!res.ok) throw new Error(`Download des KI-Modells fehlgeschlagen (HTTP ${res.status}).`);
-  const total = Number(res.headers.get('content-length')) || LAMA_MODEL_BYTES;
-  const bytes = new Uint8Array(total);
-  const reader = res.body.getReader();
+// Reicht die Download-Daten durch, zählt den Fortschritt mit und prüft die Vollständigkeit.
+// Firefox meldet über den Service Worker manchmal erst nach dem letzten Byte einen Stream-Fehler; der wird ignoriert.
+function countingStream(body, total, onProgress) {
+  const reader = body.getReader();
   let loaded = 0;
-  for (;;) {
-    let chunk;
-    try {
-      chunk = await reader.read();
-    } catch (err) {
-      // Firefox meldet über den Service Worker manchmal erst nach dem letzten Byte einen Stream-Fehler
-      if (loaded === total) break;
-      throw err;
-    }
-    if (chunk.done) break;
-    bytes.set(chunk.value, loaded);
-    loaded += chunk.value.length;
-    postMessage({ id, progress: { loaded, total } });
-  }
-  if (loaded !== total) throw new Error('Download des KI-Modells war unvollständig. Bitte erneut versuchen.');
-  // Speichern beschleunigt nur den nächsten Besuch. Wenn es scheitert (z. B. zu wenig Speicher), geht es trotzdem weiter.
-  try {
-    await cache.put(LAMA_MODEL_URL, new Response(new Blob([bytes]), { headers: { 'content-type': 'application/octet-stream' } }));
-  } catch { /* ohne Cache weitermachen */ }
-  return bytes;
+  return new ReadableStream({
+    async pull(controller) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        if (loaded === total) controller.close(); else controller.error(err);
+        return;
+      }
+      if (chunk.done) {
+        if (loaded === total) controller.close();
+        else controller.error(new Error('Download des KI-Modells war unvollständig. Bitte erneut versuchen.'));
+        return;
+      }
+      loaded += chunk.value.length;
+      onProgress(loaded);
+      controller.enqueue(chunk.value);
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  });
 }
 
-async function createSession(bytes, threads) {
+async function loadModelBytes(id) {
+  const cache = await caches.open(LAMA_CACHE_NAME);
+  let cached = await cache.match(LAMA_MODEL_URL);
+  if (!cached) {
+    const res = await fetch(LAMA_MODEL_URL);
+    if (!res.ok) throw new Error(`Download des KI-Modells fehlgeschlagen (HTTP ${res.status}).`);
+    const total = Number(res.headers.get('content-length')) || LAMA_MODEL_BYTES;
+    const body = countingStream(res.body, total, (loaded) => postMessage({ id, progress: { loaded, total } }));
+    try {
+      // Direkt in den Cache schreiben: So liegt das Modell beim Laden nicht doppelt im Arbeitsspeicher
+      await cache.put(LAMA_MODEL_URL, new Response(body, { headers: { 'content-type': 'application/octet-stream' } }));
+      cached = await cache.match(LAMA_MODEL_URL);
+    } catch (err) {
+      if (/unvollständig/.test(err?.message)) throw err;
+      cached = null; // Cache nicht nutzbar (z. B. Speicher voll): unten ohne Cache laden
+    }
+    if (!cached) return new Uint8Array(await (await fetch(LAMA_MODEL_URL)).arrayBuffer());
+  }
+  return new Uint8Array(await cached.arrayBuffer());
+}
+
+// Spart Arbeitsspeicher (gemessen in Chrome: Spitze 1,6 → 1,2 GB), rechnet dafür etwa 20 % langsamer.
+// Wird auf Handys verwendet, wo der Browser nur begrenzt Speicher bekommt.
+const LOW_MEMORY_OPTIONS = {
+  graphOptimizationLevel: 'disabled',
+  enableCpuMemArena: false,
+  enableMemPattern: false,
+  extra: { session: { disable_prepacking: '1' } },
+};
+
+async function createSession(bytes, threads, lowMemory) {
   ort.env.wasm.numThreads = threads;
   ort.env.logLevel = 'error'; // harmlose Hinweise nicht als Fehler in die Konsole schreiben
   // Safari führt dieses Modell mit WebGPU deutlich langsamer aus als mit dem Prozessor
@@ -51,16 +75,18 @@ async function createSession(bytes, threads) {
       return { s, backend: 'webgpu' };
     } catch { /* WebGPU nicht nutzbar, Prozessor nehmen */ }
   }
-  const s = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all', logSeverityLevel: 3 });
+  const options = lowMemory ? LOW_MEMORY_OPTIONS : { graphOptimizationLevel: 'all' };
+  const s = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], logSeverityLevel: 3, ...options });
   return { s, backend: 'wasm' };
 }
 
-async function init(id, { threads }) {
-  const bytes = await loadModelBytes(id);
+async function init(id, { threads, lowMemory }) {
+  let bytes = await loadModelBytes(id);
   postMessage({ id, progress: { phase: 'prepare' } });
-  const { s, backend } = await createSession(bytes, threads);
-  session = s;
-  return { backend, threads };
+  const created = await createSession(bytes, threads, lowMemory);
+  bytes = null; // die Sitzung hat jetzt ihre eigene Kopie
+  session = created.s;
+  return { backend: created.backend, threads, lowMemory };
 }
 
 async function run({ image, mask, size }) {

@@ -30,14 +30,25 @@
 <p>Probiert die Seite in diesem Browser automatisch aus: drei Bildformate, alle Varianten. Es wird nichts hochgeladen.</p>
 <label><input type="checkbox" id="withAi" checked> KI mittesten (lädt beim ersten Mal ca. 208 MB)</label>
 <button id="start">Test starten</button>
+<p id="crash" class="bad" hidden></p>
 <div id="summary"></div>
 <table id="out"></table>
-<iframe id="app" src="../index.html" title="Seite im Test"></iframe>
+<iframe id="app" title="Seite im Test"></iframe>
 
 <script type="module">
 const $ = (id) => document.getElementById(id);
 const results = [];
 const errors = [];
+
+// Ist die Seite beim letzten Test abgestürzt? Die KI notiert vor jeder Phase, wo sie gerade ist.
+// (Muss gelesen werden, bevor die Seite im Rahmen geladen wird, denn die löscht den Eintrag.)
+const PHASES = { laden: 'beim Laden des Modells', vorbereiten: 'beim Vorbereiten der KI', rechnen: 'beim Rechnen' };
+let lastCrash = null;
+try { lastCrash = localStorage.getItem('lamaPhase'); } catch { /* egal */ }
+if (lastCrash) {
+  $('crash').textContent = `Beim letzten Versuch ist der Browser ${PHASES[lastCrash] ?? lastCrash} abgestürzt (vermutlich zu wenig Arbeitsspeicher).`;
+  $('crash').hidden = false;
+}
 
 function row(name, value, ok) {
   results.push({ name, value, ok });
@@ -76,6 +87,8 @@ async function run() {
   row('Mehrkern-Freigabe (cross-origin isolated)', String(self.crossOriginIsolated), self.crossOriginIsolated === true);
   row('WebGPU vorhanden', String(!!navigator.gpu));
   row('Prozessorkerne', String(navigator.hardwareConcurrency || '?'));
+  if (navigator.deviceMemory) row('Arbeitsspeicher (laut Browser)', `${navigator.deviceMemory} GB`);
+  if (lastCrash) row('Absturz beim letzten Versuch', PHASES[lastCrash] ?? lastCrash, false);
 
   // Seite im Rahmen neu laden und Fehler mitschneiden
   frame.src = '../index.html?' + Date.now();
