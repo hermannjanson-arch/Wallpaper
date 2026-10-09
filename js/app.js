@@ -8,8 +8,9 @@ import { blurVariant } from './variants/blur.js';
 import { lamaVariant } from './variants/lama.js';
 import { seamVariant } from './variants/seam.js';
 import { comboVariant } from './variants/combo.js';
+import { exactVariant } from './variants/exact.js';
 
-const VARIANTS = new Map([lamaVariant, blurVariant, seamVariant, comboVariant].map((v) => [v.id, v]));
+const VARIANTS = new Map([lamaVariant, blurVariant, seamVariant, comboVariant, exactVariant].map((v) => [v.id, v]));
 
 const $ = (id) => document.getElementById(id);
 const state = {

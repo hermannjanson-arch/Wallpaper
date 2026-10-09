@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Selbsttest</title>
+<script src="../js/coi-setup.js"></script>
+<script src="../coi-serviceworker.js"></script>
+<style>
+  :root { --bg: #f4f3ef; --panel: #fff; --fg: #1c1c1e; --muted: #6a6a70; --line: #e2e0da; --ok: #1e7b34; --bad: #b3261e; --accent: #2b59c3; color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #131315; --panel: #1d1d20; --fg: #f1f1f3; --muted: #a2a2aa; --line: #34343a; --ok: #6fd08a; --bad: #ff8a80; --accent: #7c9cff; color-scheme: dark; }
+  }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  button { padding: 10px 16px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font: inherit; font-weight: 600; }
+  button:disabled { opacity: .5; }
+  label { display: block; margin: 10px 0; }
+  table { width: 100%; max-width: 720px; border-collapse: collapse; margin-top: 14px; background: var(--panel); border-radius: 8px; overflow: hidden; }
+  td { padding: 7px 10px; border-top: 1px solid var(--line); vertical-align: top; word-break: break-word; }
+  td:first-child { width: 34%; color: var(--muted); }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+  #summary { font-size: 1.1rem; font-weight: 700; margin-top: 14px; }
+  iframe { width: 100%; max-width: 420px; height: 760px; border: 1px solid var(--line); border-radius: 8px; margin-top: 16px; background: var(--panel); }
+</style>
+</head>
+<body>
+<h1>Selbsttest</h1>
+<p>Probiert die Seite in diesem Browser automatisch aus: drei Bildformate, alle Varianten. Es wird nichts hochgeladen.</p>
+<label><input type="checkbox" id="withAi" checked> KI mittesten (lädt beim ersten Mal ca. 208 MB)</label>
+<button id="start">Test starten</button>
+<div id="summary"></div>
+<table id="out"></table>
+<iframe id="app" src="../index.html" title="Seite im Test"></iframe>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const results = [];
+const errors = [];
+
+function row(name, value, ok) {
+  results.push({ name, value, ok });
+  const tr = document.createElement('tr');
+  const a = document.createElement('td'); a.textContent = name;
+  const b = document.createElement('td'); b.textContent = value;
+  if (ok === true) b.className = 'ok';
+  if (ok === false) b.className = 'bad';
+  tr.append(a, b);
+  $('out').append(tr);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(fn, timeoutMs, what) {
+  const end = performance.now() + timeoutMs;
+  for (;;) {
+    try { const v = fn(); if (v) return v; } catch { /* Seite lädt evtl. gerade neu */ }
+    if (performance.now() > end) throw new Error(`Zeitüberschreitung: ${what}`);
+    await sleep(200);
+  }
+}
+
+function env() {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'unbekannt';
+  return { ua, browser };
+}
+
+async function run() {
+  $('start').disabled = true;
+  $('out').innerHTML = '';
+  const t = performance.now();
+  const frame = $('app');
+  const { ua, browser } = env();
+  row('Browser', ua);
+  row('Mehrkern-Freigabe (cross-origin isolated)', String(self.crossOriginIsolated), self.crossOriginIsolated === true);
+  row('WebGPU vorhanden', String(!!navigator.gpu));
+  row('Prozessorkerne', String(navigator.hardwareConcurrency || '?'));
+
+  // Seite im Rahmen neu laden und Fehler mitschneiden
+  frame.src = '../index.html?' + Date.now();
+  await waitFor(() => {
+    const d = frame.contentDocument;
+    return d?.readyState === 'complete' && d.getElementById('targetInfo')?.textContent ? d : null;
+  }, 30000, 'Seite laden');
+  await sleep(1500); // falls die Seite sich für die Mehrkern-Freigabe noch einmal neu lädt
+  await waitFor(() => frame.contentDocument?.getElementById('targetInfo')?.textContent, 30000, 'Seite laden');
+  const win = frame.contentWindow;
+  const doc = frame.contentDocument;
+  row('Mehrkern-Freigabe in der Seite', String(win.crossOriginIsolated), win.crossOriginIsolated === true);
+  win.addEventListener('error', (e) => errors.push(e.message));
+  win.addEventListener('unhandledrejection', (e) => errors.push(String(e.reason?.message ?? e.reason)));
+  await waitFor(() => doc.getElementById('targetInfo').textContent, 10000, 'Geräteliste');
+  row('Seite geladen', 'ja', true);
+
+  doc.getElementById('sampleBtn').click();
+  await waitFor(() => doc.querySelectorAll('.card').length > 0, 15000, 'Beispielfoto');
+  row('Beispielfoto (3:4)', doc.getElementById('sourceInfo').textContent, true);
+
+  const withAi = $('withAi').checked;
+  const cases = [
+    { w: 1080, h: 1300, label: 'Wenig zu füllen', expect: ['seam', 'lama'] },
+    { w: 1206, h: 2622, label: 'Mittel (iPhone 17 Pro)', expect: ['lama', 'blur'] },
+    { w: 2560, h: 1440, label: 'Viel (Querformat)', expect: ['combo', 'blur', 'lama'] },
+  ];
+  for (const c of cases) {
+    doc.getElementById('customBox').open = true;
+    doc.getElementById('customW').value = c.w;
+    doc.getElementById('customH').value = c.h;
+    doc.getElementById('customForm').requestSubmit();
+    const t0 = performance.now();
+    await waitFor(() => doc.getElementById('targetInfo').textContent.includes(`${c.w} × ${c.h}`), 5000, 'Zielgröße');
+    await sleep(400);
+    const statuses = () => [...doc.querySelectorAll('.card')].map((card) => {
+      const s = card.querySelector('.status');
+      return { id: card.dataset.id, text: s.hidden ? 'fertig' : s.textContent };
+    });
+    if (withAi) {
+      const lama = doc.querySelector('.card[data-id="lama"]');
+      if (lama && /Antippen/.test(lama.querySelector('.status').textContent)) lama.click();
+    }
+    let final;
+    try {
+      final = await waitFor(() => {
+        const st = statuses();
+        const done = st.every((s) => s.text === 'fertig' || (!withAi && /Antippen/.test(s.text)) || /nicht geklappt|fehlgeschlagen/.test(s.text));
+        return done ? st : null;
+      }, 400000, c.label);
+    } catch (err) {
+      final = statuses();
+      errors.push(err.message);
+    }
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    const ids = final.map((s) => s.id);
+    const orderOk = JSON.stringify(ids) === JSON.stringify(c.expect);
+    const allOk = final.every((s) => s.text === 'fertig' || (!withAi && /Antippen/.test(s.text)));
+    row(`${c.label}: Varianten`, ids.join(', ') + (orderOk ? '' : ` (erwartet: ${c.expect.join(', ')})`), orderOk);
+    row(`${c.label}: Ergebnis`, final.map((s) => `${s.id}: ${s.text}`).join(' · ') + ` · ${secs} s`, allOk);
+    // Exportgröße prüfen: Die Vorschau zeigt das Ergebnis, die Datei hat genau die Zielgröße
+    const sel = doc.querySelector('.card[aria-checked="true"]')?.dataset.id;
+    row(`${c.label}: gewählt`, sel ?? '–');
+  }
+
+  row('Fehler in der Seite', errors.length ? errors.join(' | ') : 'keine', errors.length === 0);
+  const failed = results.filter((r) => r.ok === false).length;
+  $('summary').textContent = failed ? `${failed} Punkt(e) nicht in Ordnung` : `Alles in Ordnung (${((performance.now() - t) / 1000).toFixed(0)} s)`;
+  $('summary').className = failed ? 'bad' : 'ok';
+  $('start').disabled = false;
+
+  // Nur beim Testen auf dem Entwicklungsrechner: Ergebnis an den lokalen Testserver schicken
+  if (new URLSearchParams(location.search).has('report')) {
+    await fetch('/report', { method: 'POST', body: JSON.stringify({ browser, results, summary: $('summary').textContent }) }).catch(() => {});
+  }
+}
+
+$('start').addEventListener('click', () => run().catch((err) => { row('Abbruch', err.message, false); $('start').disabled = false; }));
+if (new URLSearchParams(location.search).has('auto')) $('start').click();
+</script>
+</body>
+</html>

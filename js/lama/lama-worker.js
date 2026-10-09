@@ -41,7 +41,11 @@ async function loadModelBytes(id) {
 async function createSession(bytes, threads) {
   ort.env.wasm.numThreads = threads;
   ort.env.logLevel = 'error'; // harmlose Hinweise nicht als Fehler in die Konsole schreiben
-  if (self.navigator.gpu) {
+  // Safari führt dieses Modell mit WebGPU deutlich langsamer aus als mit dem Prozessor
+  // (gemessen mit Safari 26: 12,7 s statt 6–10 s pro Rand), darum dort direkt den Prozessor nehmen
+  const ua = self.navigator.userAgent;
+  const isSafari = /Safari\//.test(ua) && !/Chrome\/|Chromium\/|Edg\/|Firefox\//.test(ua);
+  if (self.navigator.gpu && !isSafari) {
     try {
       const s = await ort.InferenceSession.create(bytes, { executionProviders: ['webgpu'], graphOptimizationLevel: 'all', logSeverityLevel: 3 });
       return { s, backend: 'webgpu' };
