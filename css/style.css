@@ -171,3 +171,15 @@ h2:first-child { margin-top: 0; }
 .foot { max-width: 1200px; margin: 0 auto; padding: 0 16px 32px; color: var(--muted); font-size: .85rem; }
 .preview-status { font-size: 1rem; }
 .preview-status span { background: var(--panel); padding: 6px 12px; border-radius: 8px; }
+
+/* Handy: Varianten als wischbare Leiste, damit die Vorschau nicht weit nach unten rutscht */
+@media (max-width: 600px) {
+  .cards {
+    grid-auto-flow: column; grid-template-columns: none; grid-auto-columns: 44%;
+    overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; margin: 0 -4px; padding-inline: 4px;
+  }
+  .card { scroll-snap-align: start; }
+  .card canvas { height: 150px; }
+  .card .desc { display: none; }
+  .badge { top: 14px; left: 14px; }
+}

@@ -3,7 +3,7 @@
 Bringt ein Foto in das exakte Bildschirmformat eines Handys, ohne Verzerren und ohne Abschneiden.
 Alles läuft im Browser, Fotos werden nirgendwohin hochgeladen. Es gibt keinen Server und keine Kosten.
 
-> Stand: Schritt 4 von 6 (Upload, Geräteauswahl, Unschärfe-Variante, KI-Erweiterung, Export). Seam Carving, Kombination und automatische Auswahl folgen.
+> Stand: Schritt 5 von 6. Alle Varianten und die automatische Auswahl sind fertig; es fehlen noch Feinschliff, Browser-Tests und die Veröffentlichungs-Anleitung.
 
 ## Lokal starten
 
@@ -19,6 +19,19 @@ Alles läuft im Browser, Fotos werden nirgendwohin hochgeladen. Es gibt keinen S
 4. Beenden: im Terminal `Ctrl + C` drücken.
 
 Die Seite einfach per Doppelklick als Datei zu öffnen, funktioniert nicht, weil Browser dann aus Sicherheitsgründen keine Zusatzdateien laden.
+
+## Die Varianten
+
+Das Foto wird immer vollständig und unverzerrt in die Zielfläche gesetzt. Die übrige Fläche wird so gefüllt:
+
+| Variante | So funktioniert sie | Gezeigt bei |
+|---|---|---|
+| Inhaltsbasiert gestreckt (Seam Carving) | Fügt Pixelstreifen an unauffälligen Stellen ein, z. B. im Himmel. Nichts wird erfunden. | wenig zu füllen (bis ca. 15 %) |
+| KI-Erweiterung | Die KI LaMa malt die Ränder passend weiter. | wenig bis mittel (bis ca. 45 %), bei viel als Zusatzoption |
+| Unschärfe-Hintergrund | Das Foto weichgezeichnet als Hintergrund. Funktioniert immer und sofort. | mittel und viel |
+| KI + Unschärfe | Nahe am Foto die KI-Ergänzung, nach außen weicher Übergang in die Unschärfe. | viel zu füllen (über ca. 45 %) |
+
+Die als beste eingeschätzte Variante steht zuerst und ist mit „Empfohlen“ markiert. Die Grenzwerte stehen in `js/config.js` (`FILL_SMALL`, `FILL_LARGE`, `SEAM_MAX_STRETCH`) und lassen sich dort anpassen.
 
 ## Die KI-Erweiterung
 
@@ -37,6 +50,7 @@ Gemessen auf einem MacBook mit Apple M1 (8 Kerne, 16 GB) in Chrome, Foto 3:4 fü
 | KI-Variante berechnen mit Grafikchip (WebGPU) | ca. 5 s |
 | KI-Variante berechnen nur mit Prozessor (4 Threads, ohne Grafikchip) | ca. 10 s |
 | Neu berechnen nach dem Verschieben (WebGPU) | ca. 3 s |
+| Seam Carving | unter 0,5 s |
 | Zum Vergleich: Firefox, nur Prozessor (Testseite, Schritt 2) | ca. 9 s |
 
 ## Neue Handymodelle ergänzen
@@ -58,4 +72,4 @@ Schwellenwerte, Unschärfe-Stärke, JPEG-Qualität usw. stehen gesammelt in `js/
 
 Hinweis zu LaMa: Das Modell wurde mit dem Bilddatensatz Places365 trainiert, dessen Nutzungsbedingungen auf Forschung ausgerichtet sind. Die Modelldatei selbst ist unter Apache-2.0 veröffentlicht.
 
-Unschärfe-Hintergrund, Layout und Export sind eigener Code ohne weitere Bibliotheken.
+Seam Carving, Unschärfe-Hintergrund, Kombination, Layout und Export sind eigener Code ohne weitere Bibliotheken.

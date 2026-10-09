@@ -31,7 +31,7 @@ function boxBlur(data, w, h, r) {
 // Der Hintergrund hängt nicht von der Position des Originals ab, darum wird er zwischengespeichert.
 const backgroundCache = new WeakMap();
 
-function background(source, W, H) {
+export function background(source, W, H) {
   const key = `${W}x${H}`;
   const cached = backgroundCache.get(source);
   if (cached?.key === key) return cached.canvas;

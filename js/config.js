@@ -7,6 +7,11 @@ export const FILL_LARGE = 0.45;   // ab hier: Kombination + Unschärfe
 // Seam Carving wird nur bis zu dieser Streckung angeboten (0.18 = 18 %)
 export const SEAM_MAX_STRETCH = 0.18;
 
+// Kombination: die KI-Ergänzung bleibt bis COMBO_FADE_START des Randes voll sichtbar und ist bei
+// COMBO_FADE_END ganz in den Unschärfe-Hintergrund übergegangen (Anteile der Randbreite)
+export const COMBO_FADE_START = 0.2;
+export const COMBO_FADE_END = 0.65;
+
 // Eingelesene Fotos werden auf diese Größe begrenzt, damit große Handyfotos (z. B. 48 MP)
 // den Browser nicht überlasten. 12 MP liegt sicher unter der Canvas-Grenze von iPhones.
 export const MAX_SOURCE_SIDE = 4096;

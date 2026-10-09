@@ -5,11 +5,31 @@ import { loadModel, isModelCached, lamaInfo } from '../lama/lama-client.js';
 
 const MB = 1_000_000;
 
+// Das KI-Ergebnis wird auch von der Kombination genutzt, darum wird es pro Auftrag nur einmal berechnet
+let shared = { key: null, promise: null, listeners: new Set() };
+
+function expandShared(job, { onMessage, isCurrent }) {
+  if (shared.key !== job.key) {
+    const entry = { key: job.key, listeners: new Set() };
+    entry.promise = expandWithLama(job, {
+      isCurrent,
+      onProgress: ({ done, total }) => {
+        for (const l of entry.listeners) l(`KI rechnet … Rand ${Math.min(done + 1, total)} von ${total}`, done / total);
+      },
+    });
+    entry.promise.catch(() => { if (shared === entry) shared = { key: null, listeners: new Set() }; });
+    shared = entry;
+  }
+  shared.listeners.add(onMessage);
+  return shared.promise;
+}
+
 export const lamaVariant = {
   id: 'lama',
   name: 'KI-Erweiterung',
   description: 'Eine KI malt die fehlenden Ränder passend zum Foto weiter.',
   async: true,
+  activationKey: 'lama',
   activationHint: `Antippen, um die KI zu laden (einmalig ca. ${Math.round(LAMA_MODEL_BYTES / MB)} MB)`,
 
   isAvailable: (job) => !!job.axis,
@@ -24,10 +44,9 @@ export const lamaVariant = {
     });
   },
 
-  render(job, { onMessage, isCurrent }) {
-    return expandWithLama(job, {
-      isCurrent,
-      onProgress: ({ done, total }) => onMessage(`KI rechnet … Rand ${Math.min(done + 1, total)} von ${total}`, done / total),
-    });
+  expand: expandShared,
+
+  render(job, opts) {
+    return expandShared(job, opts);
   },
 };

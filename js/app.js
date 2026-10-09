@@ -3,11 +3,13 @@ import { DEFAULT_DEVICE, LAMA_RECOMPUTE_DELAY } from './config.js';
 import { loadImageFile, makeCanvas, context2d, canvasToBlob, downloadBlob, buildFileName, canShareFile, shareBlob } from './image-io.js';
 import { loadDevices, searchDevices, detectScreen } from './devices.js';
 import { containRect, fillShare, freeAxis } from './layout.js';
+import { rankVariantIds } from './ranking.js';
 import { blurVariant } from './variants/blur.js';
 import { lamaVariant } from './variants/lama.js';
+import { seamVariant } from './variants/seam.js';
+import { comboVariant } from './variants/combo.js';
 
-// Reihenfolge = Rangfolge der Anzeige. Seam Carving und Kombination folgen.
-const VARIANTS = [lamaVariant, blurVariant];
+const VARIANTS = new Map([lamaVariant, blurVariant, seamVariant, comboVariant].map((v) => [v.id, v]));
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -19,8 +21,13 @@ const state = {
   selected: null,      // id der gewählten Variante
   userPicked: false,   // hat der Nutzer selbst eine Variante gewählt?
   results: new Map(),  // id -> { status: 'ready'|'pending'|'inactive'|'error', canvas, message, progress, key }
-  activation: new Map(), // id -> Fortschritt beim Laden des KI-Modells
+  activation: new Map(), // activationKey -> Fortschritt beim Laden des KI-Modells
+  available: [],       // angezeigte Varianten in Rangfolge
+  placeholder: null,   // Unschärfe-Bild, das blass gezeigt wird, solange eine Variante noch rechnet
 };
+
+const keyOf = (v, job) => v.keyFor?.(job) ?? job.key;
+const activationKeyOf = (v) => v.activationKey ?? v.id;
 
 // ---------- Speicher für Komfort (wird ignoriert, falls der Browser ihn blockiert) ----------
 const prefs = {
@@ -199,7 +206,7 @@ function makeJob() {
   const { w: W, h: H } = state.target;
   const s = state.source;
   const rect = containRect(s.width, s.height, W, H, state.offset);
-  const job = { source: s.canvas, W, H, rect, share: fillShare(rect, W, H), axis: freeAxis(rect, W, H) };
+  const job = { source: s.canvas, sourceId: state.sourceId, W, H, rect, share: fillShare(rect, W, H), axis: freeAxis(rect, W, H) };
   job.key = `${state.sourceId}|${W}x${H}|${rect.x},${rect.y}`;
   return job;
 }
@@ -214,7 +221,9 @@ function renderAll() {
 function renderNow() {
   if (!state.source || !state.target) return;
   const job = makeJob();
-  const available = VARIANTS.filter((v) => v.isAvailable(job));
+  const available = rankVariantIds(job).map((id) => VARIANTS.get(id)).filter((v) => v.isAvailable(job));
+  state.available = available;
+  state.placeholder = blurVariant.render(job);
   $('emptyHint').hidden = true;
   $('editor').hidden = false;
   $('fillInfo').hidden = false;
@@ -225,20 +234,21 @@ function renderNow() {
   const previous = state.results;
   state.results = new Map();
   for (const v of available) {
+    const key = keyOf(v, job);
     if (!v.async) {
-      state.results.set(v.id, { status: 'ready', key: job.key, canvas: v.render(job) });
+      state.results.set(v.id, { status: 'ready', key, canvas: v.id === 'blur' ? state.placeholder : v.render(job) });
       continue;
     }
     const old = previous.get(v.id);
-    if (old?.key === job.key && (old.status === 'ready' || old.scheduled)) {
+    if (old?.key === key && (old.status === 'ready' || old.scheduled)) {
       state.results.set(v.id, old); // läuft schon, ist fertig oder ist fehlgeschlagen
     } else if (!v.isReady()) {
-      const act = state.activation.get(v.id);
+      const act = state.activation.get(activationKeyOf(v));
       state.results.set(v.id, act
-        ? { status: 'pending', key: job.key, message: act.message, progress: act.progress }
-        : { status: 'inactive', key: job.key, message: v.activationHint });
+        ? { status: 'pending', key, message: act.message, progress: act.progress }
+        : { status: 'inactive', key, message: v.activationHint });
     } else {
-      state.results.set(v.id, { status: 'pending', key: job.key, message: 'KI rechnet gleich …', progress: 0, scheduled: true });
+      state.results.set(v.id, { status: 'pending', key, message: 'Wird gleich berechnet …', progress: 0, scheduled: true });
       scheduleAsync(v, job);
     }
   }
@@ -263,7 +273,8 @@ function scheduleAsync(v, job) {
 }
 
 async function runAsync(v, job) {
-  const isCurrent = () => state.results.get(v.id)?.key === job.key;
+  const key = keyOf(v, job);
+  const isCurrent = () => state.results.get(v.id)?.key === key;
   if (!isCurrent()) return;
   const entry = state.results.get(v.id);
   try {
@@ -281,34 +292,41 @@ async function runAsync(v, job) {
     if (err.message === 'stale' || !isCurrent()) return;
     Object.assign(entry, { status: 'error', message: `Hat nicht geklappt: ${err.message}` });
   }
-  const available = VARIANTS.filter((x) => state.results.has(x.id));
-  chooseDefaultSelection(available);
-  renderCards(available);
+  chooseDefaultSelection(state.available);
+  renderCards(state.available);
+  updatePositionControls(makeJob());
   drawPreview();
 }
 
 // Erstes Antippen der KI-Karte: Modell laden (Download beim ersten Mal)
 async function activate(v) {
-  if (state.activation.has(v.id)) return;
+  const akey = activationKeyOf(v);
+  if (state.activation.has(akey)) return;
+  // Alle Karten, die dasselbe Modell brauchen (KI und Kombination), zeigen den Fortschritt
+  const sharing = () => state.available.filter((x) => activationKeyOf(x) === akey);
   const act = { message: 'KI wird geladen …', progress: 0 };
-  state.activation.set(v.id, act);
+  state.activation.set(akey, act);
   renderAll();
   try {
     await v.activate((message, progress) => {
       Object.assign(act, { message, progress });
-      const entry = state.results.get(v.id);
-      if (entry) Object.assign(entry, { message, progress });
-      updateStatus(v.id);
+      for (const x of sharing()) {
+        const entry = state.results.get(x.id);
+        if (entry?.status !== 'ready') Object.assign(entry ?? {}, { message, progress });
+        updateStatus(x.id);
+      }
     });
   } catch (err) {
-    state.activation.delete(v.id);
+    state.activation.delete(akey);
     renderNow();
-    const entry = state.results.get(v.id);
-    if (entry) Object.assign(entry, { status: 'inactive', message: `Laden fehlgeschlagen: ${err.message} Antippen für neuen Versuch.` });
-    updateStatus(v.id);
+    for (const x of sharing()) {
+      const entry = state.results.get(x.id);
+      if (entry) Object.assign(entry, { status: 'inactive', message: `Laden fehlgeschlagen: ${err.message} Antippen für neuen Versuch.` });
+      updateStatus(x.id);
+    }
     return;
   }
-  state.activation.delete(v.id);
+  state.activation.delete(akey);
   renderAll();
 }
 
@@ -347,6 +365,7 @@ function renderCards(available) {
         state.userPicked = true;
         if (state.results.get(v.id)?.status === 'inactive') activate(v);
         markSelected();
+        updatePositionControls(makeJob());
         drawPreview();
       });
       cards.append(card);
@@ -369,7 +388,7 @@ function renderCards(available) {
 
 // Solange eine Variante noch nicht fertig ist, wird blass die Unschärfe-Variante gezeigt
 function placeholder() {
-  return state.results.get('blur').canvas;
+  return state.placeholder;
 }
 
 function updateStatus(id) {
@@ -442,10 +461,12 @@ function updatePreviewStatus() {
 
 function updatePositionControls(job) {
   const box = $('positionBox'), canvas = $('preview');
-  canvas.classList.toggle('movable-x', job.axis === 'x');
-  canvas.classList.toggle('movable-y', job.axis === 'y');
-  box.hidden = !job.axis;
-  if (!job.axis) return;
+  // Seam Carving füllt die ganze Fläche: dort gibt es nichts zu verschieben
+  const axis = VARIANTS.get(state.selected)?.usesOffset === false ? null : job.axis;
+  canvas.classList.toggle('movable-x', axis === 'x');
+  canvas.classList.toggle('movable-y', axis === 'y');
+  box.hidden = !axis;
+  if (!axis) return;
   $('positionLabel').textContent = job.axis === 'y' ? 'Position: oben ↔ unten' : 'Position: links ↔ rechts';
   $('positionSlider').value = String(Math.round(state.offset * 100));
 }
@@ -464,7 +485,7 @@ function setupPosition() {
   canvas.addEventListener('pointerdown', (e) => {
     if (!state.source) return;
     const job = makeJob();
-    if (!job.axis) return;
+    if (!job.axis || VARIANTS.get(state.selected)?.usesOffset === false) return;
     const { scale } = previewSize();
     const freeCss = (job.axis === 'x' ? job.W - job.rect.w : job.H - job.rect.h) * scale;
     drag = { axis: job.axis, start: job.axis === 'x' ? e.clientX : e.clientY, offset: state.offset, freeCss };
