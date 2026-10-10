@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KI-Diagnose</title>
+<script src="../js/coi-setup.js"></script>
+<script src="../coi-serviceworker.js"></script>
+<style>
+  :root { --bg: #f4f3ef; --panel: #fff; --fg: #1c1c1e; --muted: #6a6a70; --line: #e2e0da; --ok: #1e7b34; --bad: #b3261e; --accent: #2b59c3; color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #131315; --panel: #1d1d20; --fg: #f1f1f3; --muted: #a2a2aa; --line: #34343a; --ok: #6fd08a; --bad: #ff8a80; --accent: #7c9cff; color-scheme: dark; }
+  }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  button { padding: 10px 16px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font: inherit; font-weight: 600; margin-right: 8px; }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  #now { font-weight: 600; margin: 12px 0; }
+  table { width: 100%; max-width: 720px; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; }
+  td { padding: 7px 10px; border-top: 1px solid var(--line); vertical-align: top; }
+  td:first-child { width: 40%; color: var(--muted); }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>KI-Diagnose</h1>
+<p>Probiert nacheinander drei Rechenwege für die KI aus und misst, welcher auf diesem Gerät funktioniert. Wenn der Browser dabei abstürzt und neu lädt, ist das Absicht: Die Seite merkt sich das und macht automatisch weiter. Bitte nichts tippen und das Gerät entsperrt lassen, bis „Fertig“ dasteht.</p>
+<button id="start">Start</button><button id="reset" class="secondary">Zurücksetzen</button>
+<div id="now"></div>
+<table id="out"></table>
+
+<script type="module">
+import * as ort from '../vendor/onnxruntime-web/ort.webgpu.min.mjs';
+import { LAMA_MODEL_URL, LAMA_CACHE_NAME } from '../js/config.js';
+
+const KEY = 'kiDiagnose';
+const TESTS = [
+  { id: 'webgpu', label: 'Grafikchip (WebGPU)', ep: 'webgpu', threads: 1 },
+  { id: 'wasm1', label: 'Prozessor, 1 Kern', ep: 'wasm', threads: 1 },
+  { id: 'wasm2', label: 'Prozessor, 2 Kerne', ep: 'wasm', threads: 2 },
+];
+const PHASES = { laden: 'Modell laden', vorbereiten: 'Vorbereiten', rechnen: 'Rechnen' };
+const $ = (id) => document.getElementById(id);
+
+const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) ?? null; } catch { return null; } };
+const save = (s) => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* egal */ } };
+
+function render(state) {
+  $('out').innerHTML = '';
+  const add = (name, value, ok) => {
+    const tr = document.createElement('tr');
+    const a = document.createElement('td'); a.textContent = name;
+    const b = document.createElement('td'); b.textContent = value;
+    if (ok === true) b.className = 'ok'; if (ok === false) b.className = 'bad';
+    tr.append(a, b); $('out').append(tr);
+  };
+  add('Browser', navigator.userAgent);
+  add('Mehrkern-Freigabe', String(self.crossOriginIsolated));
+  add('WebGPU vorhanden', String(!!navigator.gpu));
+  for (const t of TESTS) {
+    const r = state?.results?.[t.id];
+    if (!r) { add(t.label, state?.current === t.id ? 'läuft …' : '–'); continue; }
+    if (r.crash) add(t.label, `abgestürzt beim ${PHASES[r.crash] ?? r.crash}`, false);
+    else if (r.error) add(t.label, `Fehler: ${r.error}`, false);
+    else add(t.label, `ok · Vorbereiten ${r.sessionS} s · Rechnen ${r.runS} s pro Rand`, true);
+  }
+}
+
+function mark(state, phase) {
+  state.phase = phase;
+  save(state);
+  $('now').textContent = `${TESTS.find((t) => t.id === state.current).label}: ${PHASES[phase]} …`;
+}
+
+async function modelBytes() {
+  try {
+    const cache = await caches.open(LAMA_CACHE_NAME);
+    const hit = await cache.match(LAMA_MODEL_URL);
+    if (hit) return new Uint8Array(await hit.arrayBuffer());
+  } catch { /* ohne Cache */ }
+  return new Uint8Array(await (await fetch(LAMA_MODEL_URL)).arrayBuffer());
+}
+
+async function runTest(state, t) {
+  state.current = t.id;
+  mark(state, 'laden');
+  let bytes = await modelBytes();
+  mark(state, 'vorbereiten');
+  ort.env.wasm.numThreads = t.threads;
+  ort.env.logLevel = 'error';
+  const t0 = performance.now();
+  const session = await ort.InferenceSession.create(bytes, { executionProviders: [t.ep], logSeverityLevel: 3 });
+  bytes = null;
+  const sessionS = ((performance.now() - t0) / 1000).toFixed(1);
+  mark(state, 'rechnen');
+  const N = 512 * 512, image = new Float32Array(3 * N).fill(0.5), mask = new Float32Array(N);
+  for (let i = 0; i < N / 3; i++) mask[i] = 1;
+  const t1 = performance.now();
+  await session.run({ image: new ort.Tensor('float32', image, [1, 3, 512, 512]), mask: new ort.Tensor('float32', mask, [1, 1, 512, 512]) });
+  const runS = ((performance.now() - t1) / 1000).toFixed(1);
+  return { sessionS, runS };
+}
+
+async function continueRun() {
+  const state = load();
+  if (!state?.running) { render(state); return; }
+  // Steht noch ein Test mit Phase drin, ist der Browser dabei abgestürzt
+  if (state.current && state.phase) {
+    state.results[state.current] = { crash: state.phase };
+    state.current = null; state.phase = null;
+    save(state);
+  }
+  const next = TESTS.find((t) => !state.results[t.id]);
+  render(state);
+  if (!next) {
+    state.running = false; save(state);
+    $('now').textContent = 'Fertig. Bitte die Liste kopieren und schicken.';
+    return;
+  }
+  try {
+    state.results[next.id] = await runTest(state, next);
+  } catch (err) {
+    state.results[next.id] = { error: String(err?.message ?? err).slice(0, 200) };
+  }
+  state.current = null; state.phase = null;
+  save(state);
+  // Neu laden, damit jeder Test mit frischem Arbeitsspeicher beginnt
+  location.reload();
+}
+
+$('start').addEventListener('click', () => { save({ running: true, results: {} }); continueRun(); });
+$('reset').addEventListener('click', () => { localStorage.removeItem(KEY); render(null); $('now').textContent = ''; });
+continueRun();
+</script>
+</body>
+</html>
