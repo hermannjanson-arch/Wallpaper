@@ -10,12 +10,18 @@ export const lamaInfo = { ready: false, backend: null, threads: 0 };
 // Absturz-Schutz: Vor jeder speicherhungrigen Phase wird sie notiert und danach wieder gelöscht.
 // Steht beim nächsten Seitenaufruf noch eine Phase drin, ist der Browser dabei abgestürzt
 // (auf Handys meist: zu wenig Arbeitsspeicher). Dann startet die KI nicht mehr von selbst.
+// Der Absturz bleibt vermerkt, bis die KI auf diesem Gerät einmal erfolgreich gerechnet hat.
 const PHASE_KEY = 'lamaPhase';
+const CRASH_KEY = 'lamaAbsturz';
 function setPhase(phase) {
   try { if (phase) localStorage.setItem(PHASE_KEY, phase); else localStorage.removeItem(PHASE_KEY); } catch { /* egal */ }
 }
 export const lastCrash = (() => {
-  try { const p = localStorage.getItem(PHASE_KEY); localStorage.removeItem(PHASE_KEY); return p; } catch { return null; }
+  try {
+    const phase = localStorage.getItem(PHASE_KEY);
+    if (phase) { localStorage.setItem(CRASH_KEY, phase); localStorage.removeItem(PHASE_KEY); }
+    return localStorage.getItem(CRASH_KEY);
+  } catch { return null; }
 })();
 // Normales Schließen oder Wegnavigieren ist kein Absturz
 addEventListener('pagehide', () => setPhase(null));
@@ -88,6 +94,7 @@ export async function inpaint(image, mask) {
   setPhase('rechnen');
   try {
     const { output } = await call('run', { image, mask, size: LAMA_SIZE }, [image.buffer, mask.buffer]);
+    try { localStorage.removeItem(CRASH_KEY); } catch { /* egal */ }
     return output;
   } finally {
     setPhase(null);

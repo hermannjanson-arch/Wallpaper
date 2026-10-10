@@ -31,9 +31,11 @@ export const lamaVariant = {
   async: true,
   activationKey: 'lama',
   activationHint: lastCrash
-    ? 'Die KI ist hier beim letzten Mal abgestürzt, vermutlich zu wenig Arbeitsspeicher. Antippen für einen neuen Versuch.'
+    ? 'Auf diesem Gerät abgestürzt. Antippen für neuen Versuch.'
     : `Antippen, um die KI zu laden (einmalig ca. ${Math.round(LAMA_MODEL_BYTES / MB)} MB)`,
   lastCrash,
+  crashNotice: 'Die KI braucht mehr Arbeitsspeicher, als der Browser auf diesem Gerät erlaubt, und ist beim letzten Versuch abgestürzt. '
+    + 'Tipp: Die Seite am Computer öffnen und das fertige Bild z. B. per AirDrop aufs Handy schicken.',
 
   isAvailable: (job) => !!job.axis,
   isReady: () => lamaInfo.ready,

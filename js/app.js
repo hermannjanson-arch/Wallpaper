@@ -216,13 +216,22 @@ let renderQueued = false;
 function renderAll() {
   if (renderQueued) return;
   renderQueued = true;
-  requestAnimationFrame(() => { renderQueued = false; renderNow(); });
+  const run = () => { if (!renderQueued) return; renderQueued = false; renderNow(); };
+  requestAnimationFrame(run);
+  setTimeout(run, 100); // falls requestAnimationFrame pausiert (Seite nicht sichtbar)
 }
 
 function renderNow() {
   if (!state.source || !state.target) return;
   const job = makeJob();
-  const available = rankVariantIds(job).map((id) => VARIANTS.get(id)).filter((v) => v.isAvailable(job));
+  let available = rankVariantIds(job).map((id) => VARIANTS.get(id)).filter((v) => v.isAvailable(job));
+  // Ist die KI hier schon einmal abgestürzt, wird eine andere Variante empfohlen und die KI ans Ende gestellt
+  const kiCrashed = !!lamaVariant.lastCrash && available.some((v) => activationKeyOf(v) === 'lama');
+  if (lamaVariant.lastCrash) {
+    available = [...available.filter((v) => activationKeyOf(v) !== 'lama'), ...available.filter((v) => activationKeyOf(v) === 'lama')];
+  }
+  $('kiNotice').hidden = !kiCrashed;
+  $('kiNotice').textContent = kiCrashed ? lamaVariant.crashNotice : '';
   state.available = available;
   state.placeholder = blurVariant.render(job);
   $('emptyHint').hidden = true;

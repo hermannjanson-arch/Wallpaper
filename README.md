@@ -94,6 +94,18 @@ Gemessen auf einem MacBook mit Apple M1 (8 Kerne, 16 GB), Foto 3:4 für ein iPho
 
 Auf dem Handy wurde noch nicht gemessen: Dafür nach dem Veröffentlichen die Selbsttest-Seite öffnen (siehe oben).
 
+### Auf dem Handy
+
+Getestet auf einem **iPhone 12** (iOS 18, 4 GB Arbeitsspeicher): Foto laden, Seam Carving, Unschärfe-Hintergrund und Speichern funktionieren. **Die KI-Varianten funktionieren dort nicht:** Das Modell braucht beim Vorbereiten ca. 1 GB zusätzlichen Arbeitsspeicher, Safari erlaubt einem Tab auf diesem Gerät aber weniger und stürzt ab. Ausprobiert und verworfen wurden:
+
+- Sparsame Einstellungen der KI-Laufzeit, ein anderes Speicherformat (`.ort`) und ein auf 8 Bit verkleinertes Modell: Der Speicherbedarf sank kaum.
+- Rechnen mit dem Grafikchip statt dem Prozessor: stürzt ebenfalls ab.
+- Das kleinere, für Handys gebaute Modell **MI-GAN** (MIT-Lizenz, 30 MB): Es braucht nur gut halb so viel Speicher und ist rund 10-mal schneller, erfindet beim Ansetzen breiter Ränder aber Gebäude, Treppen und fleckige Wolken. Es wurde deshalb nicht übernommen.
+
+Die Seite merkt sich einen Absturz und startet die KI danach nicht mehr von selbst, damit sie nicht immer wieder abstürzt. Auf neueren Handys mit mehr Arbeitsspeicher (z. B. iPhone 15 oder neuer) kann die KI funktionieren; das ist noch nicht getestet. **Ausweg für ältere Handys:** die Seite am Computer öffnen und das fertige Bild per AirDrop oder Nachricht aufs Handy schicken.
+
+Zum Prüfen eines Handys gibt es zwei Testseiten: `test/selbsttest.html` (alle Varianten) und `test/ki-diagnose.html` (nur die KI, auf drei Rechenwegen).
+
 ## Neue Handymodelle ergänzen
 
 In `data/devices.json` einen vorhandenen Eintrag kopieren und anpassen. `breite` und `hoehe` sind die native Auflösung in Pixeln im Hochformat.
